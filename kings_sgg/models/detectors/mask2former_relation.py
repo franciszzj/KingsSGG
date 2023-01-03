@@ -351,7 +351,7 @@ class Mask2FormerRelation(Mask2Former):
         results = self.panoptic_fusion_head.simple_test(
             mask_cls_results, mask_pred_results, img_metas, **kwargs)
 
-        if not kwargs.get('predict_relation', False):
+        if not self.test_cfg.get('predict_relation', False):
             for i in range(len(results)):
                 if 'pan_results' in results[i]:
                     results[i]['pan_results'] = results[i]['pan_results'].detach(
@@ -361,7 +361,7 @@ class Mask2FormerRelation(Mask2Former):
                     labels_per_image, bboxes, mask_pred_binary = results[i][
                         'ins_results']
                     bbox_results = bbox2result(bboxes, labels_per_image,
-                                            self.num_things_classes)
+                                               self.num_things_classes)
                     mask_results = [[] for _ in range(self.num_things_classes)]
                     for j, label in enumerate(labels_per_image):
                         mask = mask_pred_binary[j].detach().cpu().numpy()
@@ -391,13 +391,14 @@ class Mask2FormerRelation(Mask2Former):
                 object_id_list=object_id_list,
                 object_score_list=object_score_list,
                 feature_map=mask_features,
-                meta=img_metas[batch_idx]
+                meta_info=img_metas[batch_idx]
             )
 
             relation_res = []
             if object_res is not None:
                 object_embedding, object_id_list, object_score_list = object_res
-                relationship_output = self.relation_head(object_embedding, attention_mask=None)
+                relationship_output = self.relation_head(
+                    object_embedding, attention_mask=None)
                 relationship_output = relationship_output[0]
 
                 # 对角线丢弃
@@ -408,29 +409,36 @@ class Mask2FormerRelation(Mask2Former):
                 # relationship_output = torch.sigmoid(relationship_output)
 
                 # relationship_output * subject score * object score
-                object_score_tensor = torch.tensor(object_score_list, device=device, dtype=dtype)
-                relationship_output = relationship_output * object_score_tensor[None, :, None]
-                relationship_output = relationship_output * object_score_tensor[None, None, :]
+                object_score_tensor = torch.tensor(
+                    object_score_list, device=device, dtype=dtype)
+                relationship_output = relationship_output * \
+                    object_score_tensor[None, :, None]
+                relationship_output = relationship_output * \
+                    object_score_tensor[None, None, :]
 
                 # find topk
                 if relationship_output.shape[1] > 1:
-                    _, topk_indices = torch.topk(relationship_output.reshape([-1,]), k=100)
+                    _, topk_indices = torch.topk(
+                        relationship_output.reshape([-1, ]), k=100)
 
-                    # subject, object, cls
+                    # subject, object, relation
                     for index in topk_indices:
-                        pred_cls = index // (relationship_output.shape[1] ** 2)
-                        index_subject_object = index % (relationship_output.shape[1] ** 2)
+                        pred_relation = index // (relationship_output.shape[1] ** 2)
+                        index_subject_object = index % (
+                            relationship_output.shape[1] ** 2)
                         pred_subject = index_subject_object // relationship_output.shape[1]
                         pred_object = index_subject_object % relationship_output.shape[1]
-                        pred = [pred_subject.item(), pred_object.item(), pred_cls.item()]
+                        pred = [pred_subject.item(),
+                                pred_object.item(),
+                                pred_relation.item()]
                         relation_res.append(pred)
 
             rl = dict(
                 object_id_list=[oid.item() for oid in object_id_list],
-                relation=relation_res,
-            )
-
+                relation=relation_res)
             res['rel_results'] = rl
+            res['pan_results'] = res['pan_results'].detach().cpu().numpy()
+
             results = [res]
 
         return results
