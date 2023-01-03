@@ -259,11 +259,12 @@ class Mask2FormerRelation(Mask2Former):
         object_embedding = (
             feature_map * mask_tensor).sum(dim=[2, 3]) / (mask_tensor.sum(dim=[2, 3]) + 1e-8)
         object_embedding = object_embedding[None]
-        if self.merge_cls_type == 'cat':
-            object_embedding = torch.cat(
-                [object_embedding, object_cls_embedding], dim=-1)
-        elif self.merge_cls_type == 'add':
-            object_embedding = object_embedding + object_cls_embedding
+        if self.embedding_add_cls:
+            if self.merge_cls_type == 'cat':
+                object_embedding = torch.cat(
+                    [object_embedding, object_cls_embedding], dim=-1)
+            elif self.merge_cls_type == 'add':
+                object_embedding = object_embedding + object_cls_embedding
 
         if self.add_postional_encoding:
             pos_embed_zeros = feature_map[0].new_zeros(
