@@ -115,8 +115,8 @@ class RelationTransformerHead(BaseModule):
             weight = (loss / loss.max()) ** self.loss_alpha
             loss = loss * weight
         elif self.loss_type == 'v1_no_bs_limit':
-            input_tensor = torch.permute(input_tensor, (1, 0, 2, 3))
-            target_tensor = torch.permute(target_tensor, (1, 0, 2, 3))
+            input_tensor = torch.permute(pred, (1, 0, 2, 3))
+            target_tensor = torch.permute(target, (1, 0, 2, 3))
             input_tensor = pred.reshape([relation_num, -1])
             target_tensor = target.reshape([relation_num, -1])
             loss = self.multilabel_categorical_crossentropy(
