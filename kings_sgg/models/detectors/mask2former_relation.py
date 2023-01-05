@@ -210,13 +210,24 @@ class Mask2FormerRelation(Mask2Former):
         # [1, n * self.object_token_size, 256]
         embedding = torch.cat(embedding_list, dim=1)
 
-        rel_target = feature.new_zeros(
-            [1, self.relation_head.num_relation_classes, embedding.shape[1], embedding.shape[1]])
-        for ii, jj, cls_relationship in meta_info['gt_rels'][0]:
-            if not (ii in old2new_dict and jj in old2new_dict):
-                continue
-            new_ii, new_jj = old2new_dict[ii], old2new_dict[jj]
-            rel_target[0][cls_relationship][new_ii][new_jj] = 1
+        if self.relation_head.loss_type == 'v0_softmax':
+            rel_target = feature.new_zeros(
+                [1, 1, embedding.shape[1], embedding.shape[1]])
+            # last one is background, so background index should - 1.
+            rel_target += self.relation_head.num_relation_classes - 1
+            for ii, jj, cls_relationship in meta_info['gt_rels'][0]:
+                if not (ii in old2new_dict and jj in old2new_dict):
+                    continue
+                new_ii, new_jj = old2new_dict[ii], old2new_dict[jj]
+                rel_target[0, 0, new_ii, new_jj] = cls_relationship
+        else:
+            rel_target = feature.new_zeros(
+                [1, self.relation_head.num_relation_classes, embedding.shape[1], embedding.shape[1]])
+            for ii, jj, cls_relationship in meta_info['gt_rels'][0]:
+                if not (ii in old2new_dict and jj in old2new_dict):
+                    continue
+                new_ii, new_jj = old2new_dict[ii], old2new_dict[jj]
+                rel_target[0, cls_relationship, new_ii, new_jj] = 1
 
         return embedding, rel_target
 
@@ -269,7 +280,7 @@ class Mask2FormerRelation(Mask2Former):
         if self.add_postional_encoding:
             pos_embed_zeros = feature_map[0].new_zeros(
                 (1, ) + feature_map[0].shape[-2:])
-            pos_embed = self.relationship_head.postional_encoding_layer(
+            pos_embed = self.relationship.postional_encoding_layer(
                 pos_embed_zeros)
             for idx in range(object_embedding.shape[1]):
                 pos_embed_mask_pooling = self._mask_pooling(
@@ -398,37 +409,46 @@ class Mask2FormerRelation(Mask2Former):
             relation_res = []
             if object_res is not None:
                 object_embedding, object_id_list, object_score_list = object_res
-                relationship_output = self.relation_head(
+                # relation_output: [batch_size, num_relation_classes, object_num, object_num]
+                relation_output = self.relation_head(
                     object_embedding, attention_mask=None)
-                relationship_output = relationship_output[0]
+                relation_output = relation_output[0]
 
-                # 对角线丢弃
-                for idx_i in range(relationship_output.shape[1]):
-                    relationship_output[:, idx_i, idx_i] = -9999
+                # Discard the relationship corresponding to the object itself
+                for idx_i in range(relation_output.shape[1]):
+                    relation_output[:, idx_i, idx_i] = -9999
 
-                relationship_output = torch.exp(relationship_output)
-                # relationship_output = torch.sigmoid(relationship_output)
+                loss_type = self.relation_head.loss_type
+                if loss_type == 'v0_softmax':
+                    relation_output = torch.softmax(relation_output, dim=1)
+                    relation_output = relation_output[:(self.relation_head.num_relation_classes-1)]
+                elif loss_type == 'v0_sigmoid':
+                    relation_output = torch.sigmoid(relation_output)
+                elif loss_type in ['v1', 'v1_no_bs_limit']:
+                    relation_output = torch.exp(relation_output)
+                    # relation_output = torch.sigmoid(relation_output)
 
-                # relationship_output * subject score * object score
+                # relation_output * subject score * object score
                 object_score_tensor = torch.tensor(
                     object_score_list, device=device, dtype=dtype)
-                relationship_output = relationship_output * \
+                relation_output = relation_output * \
                     object_score_tensor[None, :, None]
-                relationship_output = relationship_output * \
+                relation_output = relation_output * \
                     object_score_tensor[None, None, :]
 
                 # find topk
-                if relationship_output.shape[1] > 1:
+                if relation_output.shape[1] > 1:
                     _, topk_indices = torch.topk(
-                        relationship_output.reshape([-1, ]), k=100)
+                        relation_output.reshape([-1, ]), k=100)
 
                     # subject, object, relation
                     for index in topk_indices:
-                        pred_relation = index // (relationship_output.shape[1] ** 2)
+                        pred_relation = index // (
+                            relation_output.shape[1] ** 2)
                         index_subject_object = index % (
-                            relationship_output.shape[1] ** 2)
-                        pred_subject = index_subject_object // relationship_output.shape[1]
-                        pred_object = index_subject_object % relationship_output.shape[1]
+                            relation_output.shape[1] ** 2)
+                        pred_subject = index_subject_object // relation_output.shape[1]
+                        pred_object = index_subject_object % relation_output.shape[1]
                         pred = [pred_subject.item(),
                                 pred_object.item(),
                                 pred_relation.item()]

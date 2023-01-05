@@ -33,6 +33,9 @@ class RelationTransformerHead(BaseModule):
         self.output_feature_size = output_feature_size
         self.num_transformer_layer = num_transformer_layer
         self.num_object_classes = num_object_classes
+        if loss_type == 'v0_softmax':
+            # add background, the last one is background
+            num_relation_classes += 1
         self.num_relation_classes = num_relation_classes
         self.cls_qk_size = cls_qk_size
         self.max_object_num = max_object_num
@@ -69,6 +72,16 @@ class RelationTransformerHead(BaseModule):
         self.model.encoder.layer = self.model.encoder.layer[:num_transformer_layer]
         self.model.embeddings.word_embeddings = None
 
+        # loss
+        if loss_type == 'v0_softmax':
+            self.loss_fn = nn.CrossEntropyLoss()
+        elif loss_type == 'v0_sigmoid':
+            self.loss_fn = nn.BCEWithLogitsLoss()
+        elif loss_type in ['v1', 'v1_no_bs_limit']:
+            print('Use multilabel_categorical_crossentropy.')
+        else:
+            assert False, 'Please use support loss type.'
+
     def forward(self, inputs_embeds, attention_mask=None):
         position_ids = torch.ones([1, inputs_embeds.shape[1]]).to(
             inputs_embeds.device).to(torch.long)
@@ -92,8 +105,8 @@ class RelationTransformerHead(BaseModule):
 
     def loss(self, pred, target, mask_attention):
         """
-            y_pred: [batch_size, 56, object_num, object_num]
-            y_true: [batch_size, 56, object_num, object_num]
+            pred: [batch_size, 56, object_num, object_num]
+            target: [batch_size, 56, object_num, object_num]
             mask_attention: [batch_size, 56, object_num, object_num]
         """
 
@@ -104,9 +117,16 @@ class RelationTransformerHead(BaseModule):
         for idx in range(batch_size):
             n = torch.sum(mask_attention[idx]).to(torch.int)
             mask[idx, :, :n, :n] = 1
+            if self.loss_type == 'v0_softmax':
+                target[idx, :, n:, n:] = -100
         pred = pred * mask - 9999 * (1 - mask)
 
-        if self.loss_type == 'v1':
+        if self.loss_type == 'v0_softmax':
+            target = target[:, 0].to(torch.long)
+            loss = self.loss_fn(pred, target)
+        elif self.loss_type == 'v0_sigmoid':
+            loss = self.loss_fn(pred, target)
+        elif self.loss_type == 'v1':
             assert pred.shape[0] == 1 and target.shape[0] == 1
             input_tensor = pred.reshape([relation_num, -1])
             target_tensor = target.reshape([relation_num, -1])
@@ -127,23 +147,24 @@ class RelationTransformerHead(BaseModule):
         loss = loss.mean()
         losses['loss_relation'] = loss * self.loss_weight
 
-        # f1, p, r
-        # [f1, precise, recall], [f1_mean, precise_mean,
-        #                         recall_mean] = self.get_f1_p_r(pred, target, mask)
-        # losses['relation.f1'] = f1
-        # losses['relation.precise'] = precise
-        # losses['relation.recall'] = recall
-        # losses['relation.f1_mean'] = f1_mean
-        # losses['relation.precise_mean'] = precise_mean
-        # losses['relation.recall_mean'] = recall_mean
+        if self.loss_type != 'v0_softmax':
+            # f1, p, r
+            # [f1, precise, recall], [f1_mean, precise_mean,
+            #                         recall_mean] = self.get_f1_p_r(pred, target, mask)
+            # losses['relation.f1'] = f1
+            # losses['relation.precise'] = precise
+            # losses['relation.recall'] = recall
+            # losses['relation.f1_mean'] = f1_mean
+            # losses['relation.precise_mean'] = precise_mean
+            # losses['relation.recall_mean'] = recall_mean
 
-        # recall
-        recall_20 = self.get_recall_N(pred, target, mask, object_num=20)
-        # recall_50 = self.get_recall_N(pred, target, mask, object_num=50)
-        # recall_100 = self.get_recall_N(pred, target, mask, object_num=100)
-        losses['relation.recall@20'] = recall_20
-        # losses['relation.recall@50'] = recall_50
-        # losses['relation.recall@100'] = recall_100
+            # recall
+            recall_20 = self.get_recall_N(pred, target, mask, object_num=20)
+            # recall_50 = self.get_recall_N(pred, target, mask, object_num=50)
+            # recall_100 = self.get_recall_N(pred, target, mask, object_num=100)
+            losses['relation.recall@20'] = recall_20
+            # losses['relation.recall@50'] = recall_50
+            # losses['relation.recall@100'] = recall_100
 
         return losses
 
