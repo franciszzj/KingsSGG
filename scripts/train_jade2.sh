@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #SBATCH --output=/jmain02/home/J2AD019/exk01/%u/logs/%j.out
-#SBATCH --job-name=psg
+#SBATCH --job-name=kings_sgg
 #SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=7
 #SBATCH --ntasks-per-node=8
