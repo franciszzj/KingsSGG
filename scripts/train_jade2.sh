@@ -22,4 +22,5 @@ python -m torch.distributed.launch \
   tools/train.py \
   $CONFIG \
   --auto-resume \
+  --no-validate \
   --launcher pytorch
